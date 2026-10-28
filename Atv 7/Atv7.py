@@ -54,3 +54,28 @@ if __name__ == "__main__":
     print("--- Propriedades Hidrostáticas ---")
     for propriedade, valor in resultados.items():
         print(f"{propriedade}: {valor:.2f}")
+
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    calados = np.linspace(hp + 0.1, hp + hc, 200)
+    KB, BM, KM = [], [], []
+
+    for t in calados:
+        r = calcular_hidrostatica(Lp, bp, hp, bc, hc, t, rho)
+        KB.append(r["KB"])
+        BM.append(r["BM"])
+        KM.append(r["KM"])
+
+    plt.figure()
+    plt.plot(calados, KB, label="KB")
+    plt.plot(calados, BM, label="BM")
+    plt.plot(calados, KM, label="KM")
+    plt.axvline(T, color="gray", linestyle="--", label=f"T = {T} m")
+    plt.xlabel("Calado (m)")
+    plt.ylabel("Altura (m)")
+    plt.title("Curvas Hidrostáticas vs Calado")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
