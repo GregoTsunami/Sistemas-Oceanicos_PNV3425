@@ -3,6 +3,7 @@ import pandas as pd
 import scipy.optimize as opt
 from scipy.optimize import dual_annealing
 from scipy.integrate import simpson
+from scipy.interpolate import make_interp_spline
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -415,7 +416,7 @@ def _avaliar_plano_vento(dados, res_estatica, plano, passo_deg=1.0):
 
         # Curva HA(phi) e Área B até phi_al
         phi_all_rad = np.radians(phi_deg)
-        HA = (HM0 * np.cos(phi_all_rad) + HM_ud * np.sin(phi_all_rad)) / Delta_MN
+        HA = (HM0 * (np.cos(phi_all_rad)**2) + HM_ud * (np.sin(phi_all_rad)**2)) / Delta_MN
         Area_B = simpson(y=HA[:idx_al + 1], x=phi_int_rad) if idx_al >= 2 else 1e9
         razao_AB = Area_A / Area_B if Area_B > 0 else 0.0
 
@@ -664,8 +665,17 @@ def avaliar_candidata_sa(x, w1):
     # Etapa 3: Curva GZ e Critério de Vento (4 casos)
     res_ven = calcular_estabilidade_vento(dados, res_est, passo_deg=1.0)
     if not res_ven["vento_viavel"]:
-        penalidade += 1500.0 * max(0.05, 1.30 - res_ven["menor_AB"])
-        return 1e5 + penalidade
+        penalidade_vento = 0.0
+        for pl in ["Transversal", "Longitudinal"]:
+            for vk in ["100_nos", "70_nos"]:
+                dv = res_ven[pl]["velocidades"][vk]
+                if dv["Razao_AB"] < 1.30:
+                    penalidade_vento += 2000.0 * (1.30 - dv["Razao_AB"])
+                if dv["phi1"] is None or dv["phi1"] >= dv["phi_al"]:
+                    penalidade_vento += 1500.0
+                if not dv["GZ_positivo_OK"]:
+                    penalidade_vento += 1500.0
+        return 1e5 + max(50.0, penalidade_vento)
 
     # Solução 100% viável! Registra no histórico para montar o espaço de soluções
     P_C = res_est["P_C"]
@@ -684,7 +694,7 @@ def avaliar_candidata_sa(x, w1):
     return w1 * Hs_heave + w2 * (P_C / 10000.0)
 
 print("Iniciando otimização com Dual Annealing (Simulated Annealing)...")
-pesos_w1 = np.linspace(0.0, 1.0, 15)  # 15 combinações de pesos entre 0 e 1
+pesos_w1 = np.linspace(0.0, 1.0, 10)  # 15 combinações de pesos entre 0 e 1
 resultados_pareto_sa = []
 
 for idx, w1 in enumerate(pesos_w1):
@@ -692,11 +702,12 @@ for idx, w1 in enumerate(pesos_w1):
         func=avaliar_candidata_sa,
         bounds=bounds_sa,
         args=(w1,),
-        maxiter=120,           # Número de ciclos de resfriamento
+        maxiter=20,           # Número de ciclos de resfriamento
         initial_temp=3000.0,   # Temperatura inicial padrão do Generalized SA
         visit=2.62,            # Parâmetro de distribuição de salto
         no_local_search=False, # Mantém o refinamento local contínuo
-        seed=100 + idx
+        seed=100 + idx,
+        accept = -5            # Taxa de aceite do SA
     )
 
     viavel_rodada = res_opt.fun < 1e5
@@ -765,23 +776,40 @@ c1 = reavaliar_detalhado(row_c1)
 c2 = reavaliar_detalhado(row_c2)
 c3 = reavaliar_detalhado(row_c3)
 
+
 fig_pareto = go.Figure()
 
-# Nuvem de pontos viáveis (amostragem visual se houver milhares de pontos)
+# Nuvem de pontos viáveis
 df_nuvem = df_viaveis.sample(min(3000, len(df_viaveis)), random_state=42)
+
 fig_pareto.add_trace(go.Scatter(
     x=df_nuvem["P_C"], y=df_nuvem["Hs_heave"],
     mode="markers", name="Soluções Viáveis",
-    marker=dict(color="lightgray", size=5, opacity=0.6)
+    marker=dict(color="#E8A0BF", size=5, opacity=0.7)
 ))
 
-# Curva da Fronteira de Pareto
-fig_pareto.add_trace(go.Scatter(
-    x=df_pareto["P_C"], y=df_pareto["Hs_heave"],
-    mode="lines+markers", name="Fronteira de Pareto",
-    line=dict(color="royalblue", width=2.5),
-    marker=dict(size=7)
-))
+# Fronteira de Pareto — curva azul suave
+if len(df_pareto) >= 4:
+    _x = df_pareto["P_C"].values
+    _y = df_pareto["Hs_heave"].values
+    _order = np.argsort(_x)
+    _x, _y = _x[_order], _y[_order]
+    _t = np.linspace(0, 1, len(_x))
+    _t_fine = np.linspace(0, 1, 300)
+    _k = min(3, len(_x) - 1)
+    _spline_x = make_interp_spline(_t, _x, k=_k)(_t_fine)
+    _spline_y = make_interp_spline(_t, _y, k=_k)(_t_fine)
+    fig_pareto.add_trace(go.Scatter(
+        x=_spline_x, y=_spline_y,
+        mode="lines", name="Fronteira de Pareto",
+        line=dict(color="royalblue", width=2.5, shape="spline")
+    ))
+elif len(df_pareto) >= 2:
+    fig_pareto.add_trace(go.Scatter(
+        x=df_pareto["P_C"], y=df_pareto["Hs_heave"],
+        mode="lines", name="Fronteira de Pareto",
+        line=dict(color="royalblue", width=2.5)
+    ))
 
 # Marcadores dos 3 Cenários
 marcadores = [
@@ -789,21 +817,29 @@ marcadores = [
     (c2, "Cenário 2: Mínimo Heave", "crimson", "square"),
     (c3, "Cenário 3: Solução Escolhida", "darkorange", "star")
 ]
+
 for cen, rotulo, cor, simb in marcadores:
     fig_pareto.add_trace(go.Scatter(
         x=[cen["est"]["P_C"]], y=[cen["din"]["Hs_heave"]],
         mode="markers+text", name=rotulo,
         text=[rotulo.split(":")[0]], textposition="top right",
-        marker=dict(color=cor, size=14, symbol=simb, line=dict(width=1.5, color="black"))
+        marker=dict(
+            color=cor, size=14, symbol=simb,
+            line=dict(width=1.5, color="black")
+        )
     ))
 
+# Layout do gráfico
 fig_pareto.update_layout(
-    title="Conjunto de Soluções Viáveis e Fronteira de Pareto (Campo BM-S-52)",
+    title="Conjunto de Soluções Viáveis (Campo BM-S-52)",
     xaxis_title="Peso Estrutural do Casco - P_C (t)",
     yaxis_title="Altura Significativa de Heave - H1/3,z (m)",
-    height=550
+    width=700,
+    height=700
 )
+
 fig_pareto.show()
+
 
 def _col_ficha(c):
     d, e, v, h = c["dados"], c["est"], c["ven"], c["din"]
