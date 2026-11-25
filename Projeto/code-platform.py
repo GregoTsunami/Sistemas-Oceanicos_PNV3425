@@ -702,12 +702,12 @@ for idx, w1 in enumerate(pesos_w1):
         func=avaliar_candidata_sa,
         bounds=bounds_sa,
         args=(w1,),
-        maxiter=20,           # Número de ciclos de resfriamento
+        maxiter=120,           # Número de ciclos de resfriamento
         initial_temp=3000.0,   # Temperatura inicial padrão do Generalized SA
         visit=2.62,            # Parâmetro de distribuição de salto
         no_local_search=False, # Mantém o refinamento local contínuo
         seed=100 + idx,
-        accept = -5            # Taxa de aceite do SA
+        # accept = -5            # Taxa de aceite do SA
     )
 
     viavel_rodada = res_opt.fun < 1e5
